@@ -31,9 +31,14 @@ it will check each change previously to avoid system crashes.
 - fix some bugs
 
 
+# Updates
+
+I will update this repo if I have time to do it. please if you have any ideas or improvements commit it on different brands (write down your name and I will credit you here)
+
 
 
 # Credits
 
 Based on [Payson](https://github.com/paysonism)
 Made by [TrickSTRR](https://github.com/trickstrr)
+Discord: .trickstrr
