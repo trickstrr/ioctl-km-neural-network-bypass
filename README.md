@@ -26,10 +26,15 @@ it will check each change previously to avoid system crashes.
 
 # ToDo:
 
-- Implement more EAC hooks
-- pre-training for the NN
-- fix some bugs
-
+- Complete EAC function hooks and signatures
+- Improve pattern detection accuracy
+- Strengthen encryption
+- Add memory protection
+- Implement more defensive features
+- Optimize performance (AVX/SSE optimizations)
+- FindEacFunction currently only has basic PE parsing
+- Need to add EAC-specific function signatures
+- Make it compatible for manual mapping
 
 # Updates
 
