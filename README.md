@@ -25,9 +25,9 @@ it will check each change previously to avoid system crashes.
 
 
 ToDo:
-Implement more EAC hooks
-pre-training for the NN
-fix some bugs
+- Implement more EAC hooks
+- pre-training for the NN
+- fix some bugs
 
 
 
