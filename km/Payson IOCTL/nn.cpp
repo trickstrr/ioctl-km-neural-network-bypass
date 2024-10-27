@@ -274,9 +274,17 @@ ULONG DecoyCount = 0;
 HOOK_DATA g_Hooks[MAX_HOOKS] = { 0 };
 INT g_HookCount = 0;
 
+static THREAD_CONTEXT g_ManagedThreads[MAX_MANAGED_THREADS] = { 0 };
+static KSPIN_LOCK g_ThreadLock = { 0 };
+static BOOLEAN g_ThreadManagerInitialized = FALSE;
+
 extern "C" int _fltused = 1;
 
 extern "C" ULONG NTAPI RtlRandomEx(PULONG Seed);
+
+
+
+
 
 float abs_float(float x) {
     return x < 0 ? -x : x;
@@ -318,6 +326,173 @@ NTSTATUS InitializeFunctionPointers()
     return STATUS_SUCCESS;
 }
 
+
+
+//thread manager
+NTSTATUS InitializeThreadManager(void) {
+    if (!g_ThreadManagerInitialized) {
+        KeInitializeSpinLock(&g_ThreadLock);
+
+        for (int i = 0; i < MAX_MANAGED_THREADS; i++) {
+            KeInitializeEvent(&g_ManagedThreads[i].StopEvent, NotificationEvent, FALSE);
+        }
+
+        g_ThreadManagerInitialized = TRUE;
+    }
+    return STATUS_SUCCESS;
+}
+
+void CleanupThreadManager(void) {
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_ThreadLock, &oldIrql);
+
+    for (int i = 0; i < MAX_MANAGED_THREADS; i++) {
+        if (g_ManagedThreads[i].ThreadHandle) {
+            // Signal thread to stop
+            g_ManagedThreads[i].Stopping = TRUE;
+            KeSetEvent(&g_ManagedThreads[i].StopEvent, IO_NO_INCREMENT, FALSE);
+
+            // Wait for thread completion
+            KeReleaseSpinLock(&g_ThreadLock, oldIrql);
+
+            if (g_ManagedThreads[i].Thread) {
+                KeWaitForSingleObject(
+                    g_ManagedThreads[i].Thread,
+                    Executive,
+                    KernelMode,
+                    FALSE,
+                    NULL
+                );
+
+                ObDereferenceObject(g_ManagedThreads[i].Thread);
+            }
+
+            if (g_ManagedThreads[i].ThreadHandle) {
+                ZwClose(g_ManagedThreads[i].ThreadHandle);
+            }
+
+            KeAcquireSpinLock(&g_ThreadLock, &oldIrql);
+
+            RtlZeroMemory(&g_ManagedThreads[i], sizeof(THREAD_CONTEXT));
+        }
+    }
+
+    KeReleaseSpinLock(&g_ThreadLock, oldIrql);
+}
+
+static VOID ThreadWrapper(PVOID StartContext) {
+    PTHREAD_CONTEXT threadContext = (PTHREAD_CONTEXT)StartContext;
+
+    if (!threadContext || !threadContext->ThreadRoutine) {
+        PsTerminateSystemThread(STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    __try {
+        // Execute the actual thread routine
+        threadContext->ThreadRoutine(threadContext->Context);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        C2_DBG_PRINT("Exception in managed thread: 0x%X\n", GetExceptionCode());
+    }
+
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+NTSTATUS CreateManagedThread(PKSTART_ROUTINE StartRoutine, PVOID Context) {
+    if (!StartRoutine) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!g_ThreadManagerInitialized) {
+        NTSTATUS status = InitializeThreadManager();
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
+
+    KIRQL oldIrql;
+    NTSTATUS status = STATUS_SUCCESS;
+    INT slot = -1;
+
+    KeAcquireSpinLock(&g_ThreadLock, &oldIrql);
+
+    // Find free slot
+    for (int i = 0; i < MAX_MANAGED_THREADS; i++) {
+        if (!g_ManagedThreads[i].ThreadHandle) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == -1) {
+        KeReleaseSpinLock(&g_ThreadLock, oldIrql);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    // Initialize thread context
+    g_ManagedThreads[slot].ThreadRoutine = StartRoutine;
+    g_ManagedThreads[slot].Context = Context;
+    g_ManagedThreads[slot].Stopping = FALSE;
+    KeResetEvent(&g_ManagedThreads[slot].StopEvent);
+
+    // Create system thread
+    status = PsCreateSystemThread(
+        &g_ManagedThreads[slot].ThreadHandle,
+        THREAD_ALL_ACCESS,
+        NULL,
+        NULL,
+        NULL,
+        ThreadWrapper,
+        &g_ManagedThreads[slot]
+    );
+
+    if (NT_SUCCESS(status)) {
+        // Get thread object
+        status = ObReferenceObjectByHandle(
+            g_ManagedThreads[slot].ThreadHandle,
+            THREAD_ALL_ACCESS,
+            *PsThreadType,
+            KernelMode,
+            (PVOID*)&g_ManagedThreads[slot].Thread,
+            NULL
+        );
+
+        if (!NT_SUCCESS(status)) {
+            ZwClose(g_ManagedThreads[slot].ThreadHandle);
+            g_ManagedThreads[slot].ThreadHandle = NULL;
+            g_ManagedThreads[slot].Thread = NULL;
+        }
+    }
+    else {
+        RtlZeroMemory(&g_ManagedThreads[slot], sizeof(THREAD_CONTEXT));
+    }
+
+    KeReleaseSpinLock(&g_ThreadLock, oldIrql);
+    return status;
+}
+
+// check if thread should stop
+BOOLEAN ShouldThreadStop(void) {
+    KIRQL oldIrql;
+    BOOLEAN shouldStop = FALSE;
+    PKTHREAD currentThread = KeGetCurrentThread();  // Use KeGetCurrentThread instead of PsGetCurrentThread
+
+    KeAcquireSpinLock(&g_ThreadLock, &oldIrql);
+
+    for (int i = 0; i < MAX_MANAGED_THREADS; i++) {
+        if (g_ManagedThreads[i].Thread == currentThread) {
+            shouldStop = g_ManagedThreads[i].Stopping;
+            break;
+        }
+    }
+
+    KeReleaseSpinLock(&g_ThreadLock, oldIrql);
+    return shouldStop;
+}
+
+
+//Neural Network
 void* NeuralNetwork_AllocateMemory(size_t size)
 {
     return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, 'NNMP');
@@ -336,40 +511,105 @@ float fast_exp(float x) {
 }
 
 NeuralNetwork* NeuralNetwork_Create(int inputNodes, int hiddenNodes, int outputNodes) {
-    NeuralNetwork* nn = (NeuralNetwork*)NeuralNetwork_AllocateMemory(sizeof(NeuralNetwork));
-    if (!nn) return NULL;
+    if (inputNodes <= 0 || hiddenNodes <= 0 || outputNodes <= 0 ||
+        inputNodes > MAX_NODES || hiddenNodes > MAX_NODES || outputNodes > MAX_NODES) {
+        return NULL;
+    }
 
-    nn->inputNodes = inputNodes;
-    nn->hiddenNodes = hiddenNodes;
-    nn->outputNodes = outputNodes;
+    NeuralNetwork* nn = NULL;
+    float* weightsIH = NULL;
+    float* weightsHO = NULL;
+    float* biasH = NULL;
+    float* biasO = NULL;
 
-    nn->weightsInputHidden = (float*)NeuralNetwork_AllocateMemory(inputNodes * hiddenNodes * sizeof(float));
-    nn->weightsHiddenOutput = (float*)NeuralNetwork_AllocateMemory(hiddenNodes * outputNodes * sizeof(float));
-    nn->biasHidden = (float*)NeuralNetwork_AllocateMemory(hiddenNodes * sizeof(float));
-    nn->biasOutput = (float*)NeuralNetwork_AllocateMemory(outputNodes * sizeof(float));
+    __try {
+        // Allocate main structure
+        nn = (NeuralNetwork*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            sizeof(NeuralNetwork),
+            'NNMM');
+        if (!nn) __leave;
 
-   
-    for (int i = 0; i < inputNodes * hiddenNodes; i++)
-        nn->weightsInputHidden[i] = (float)RtlRandomEx(NULL) / MAXULONG;
-    for (int i = 0; i < hiddenNodes * outputNodes; i++)
-        nn->weightsHiddenOutput[i] = (float)RtlRandomEx(NULL) / MAXULONG;
-    for (int i = 0; i < hiddenNodes; i++)
-        nn->biasHidden[i] = (float)RtlRandomEx(NULL) / MAXULONG;
-    for (int i = 0; i < outputNodes; i++)
-        nn->biasOutput[i] = (float)RtlRandomEx(NULL) / MAXULONG;
+        RtlZeroMemory(nn, sizeof(NeuralNetwork));
 
-    nn->lastEacDetectionCount = 0;
-    nn->lastHiddenDriverScore = 0.0f;
-    nn->memoryObfuscationLevel = 0;
-    nn->lastMemoryObfuscationLevel = 0;
-    nn->decoyCount = 0;
-    nn->lastDecoyCount = 0;
-    nn->performanceScore = 0.0f;
-    nn->lastPerformanceScore = 0.0f;
-    nn->memoryFootprint = 0;
-    nn->lastMemoryFootprint = 0;
+        // Allocate weights and biases
+        weightsIH = (float*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            inputNodes * hiddenNodes * sizeof(float),
+            'NNWI');
+        if (!weightsIH) __leave;
 
-    return nn;
+        weightsHO = (float*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            hiddenNodes * outputNodes * sizeof(float),
+            'NNWO');
+        if (!weightsHO) __leave;
+
+        biasH = (float*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            hiddenNodes * sizeof(float),
+            'NNBH');
+        if (!biasH) __leave;
+
+        biasO = (float*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            outputNodes * sizeof(float),
+            'NNBO');
+        if (!biasO) __leave;
+
+        // Initialize structure
+        nn->inputNodes = inputNodes;
+        nn->hiddenNodes = hiddenNodes;
+        nn->outputNodes = outputNodes;
+        nn->weightsInputHidden = weightsIH;
+        nn->weightsHiddenOutput = weightsHO;
+        nn->biasHidden = biasH;
+        nn->biasOutput = biasO;
+
+        // Initialize memory trackers
+        nn->lastEacDetectionCount = 0;
+        nn->lastHiddenDriverScore = 0.0f;
+        nn->memoryObfuscationLevel = 0;
+        nn->lastMemoryObfuscationLevel = 0;
+        nn->decoyCount = 0;
+        nn->lastDecoyCount = 0;
+        nn->performanceScore = 0.0f;
+        nn->lastPerformanceScore = 0.0f;
+        nn->memoryFootprint = sizeof(NeuralNetwork) +
+            (inputNodes * hiddenNodes +
+                hiddenNodes * outputNodes +
+                hiddenNodes + outputNodes) * sizeof(float);
+
+        KeInitializeSpinLock(&nn->weightLock);
+
+        // Initialize weights with random values safely
+        ULONG seed = (ULONG)__rdtsc();
+        for (int i = 0; i < inputNodes * hiddenNodes; i++) {
+            weightsIH[i] = ((float)RtlRandomEx(&seed) / MAXULONG) * 2.0f - 1.0f;
+        }
+
+        seed = (ULONG)__rdtsc();
+        for (int i = 0; i < hiddenNodes * outputNodes; i++) {
+            weightsHO[i] = ((float)RtlRandomEx(&seed) / MAXULONG) * 2.0f - 1.0f;
+        }
+
+        seed = (ULONG)__rdtsc();
+        for (int i = 0; i < hiddenNodes; i++) {
+            biasH[i] = ((float)RtlRandomEx(&seed) / MAXULONG) * 2.0f - 1.0f;
+        }
+
+        seed = (ULONG)__rdtsc();
+        for (int i = 0; i < outputNodes; i++) {
+            biasO[i] = ((float)RtlRandomEx(&seed) / MAXULONG) * 2.0f - 1.0f;
+        }
+
+        return nn;
+
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Cleanup on exception
+        if (biasO) ExFreePool(biasO);
+        if (biasH) ExFreePool(biasH);
+        if (weightsHO) ExFreePool(weightsHO);
+        if (weightsIH) ExFreePool(weightsIH);
+        if (nn) ExFreePool(nn);
+        return NULL;
+    }
 }
 
 
@@ -644,20 +884,55 @@ void NeuralNetwork_DeobfuscateCode(NeuralNetwork* nn, PVOID targetAddress, SIZE_
 //EAC
 
 void NeuralNetwork_MonitorEAC(NeuralNetwork* nn, PVOID eacDriverBase, SIZE_T eacDriverSize) {
+    if (!nn || !eacDriverBase || !eacDriverSize) return;
+
+    NTSTATUS status;
+
+    // Initialize EAC monitoring if not already initialized
+    status = InitializeEACMonitoring();
+    if (!NT_SUCCESS(status)) {
+        C2_DBG_PRINT("Failed to initialize EAC monitoring: 0x%X\n", status);
+        return;
+    }
+
+    // Register the main EAC driver region
+    status = RegisterEACRegion(eacDriverBase, eacDriverSize, TRUE);
+    if (!NT_SUCCESS(status)) {
+        C2_DBG_PRINT("Failed to register EAC region: 0x%X\n", status);
+        return;
+    }
+
+    // Store EAC information
     nn->eacDriverBase = eacDriverBase;
     nn->eacDriverSize = eacDriverSize;
 
+    // Create snapshot using safe memory reading
     if (nn->eacCodeSnapshot) {
-        NeuralNetwork_FreeMemory(nn->eacCodeSnapshot);
-    }
-    nn->eacCodeSnapshot = (UCHAR*)NeuralNetwork_AllocateMemory(eacDriverSize);
-    if (nn->eacCodeSnapshot) {
-        RtlCopyMemory(nn->eacCodeSnapshot, eacDriverBase, eacDriverSize);
+        ExFreePool(nn->eacCodeSnapshot);
     }
 
-    HANDLE threadHandle;
-    PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-        (PKSTART_ROUTINE)NeuralNetwork_EvadeDetection, nn);
+    nn->eacCodeSnapshot = (UCHAR*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+        eacDriverSize,
+        'EACS');
+
+    if (nn->eacCodeSnapshot) {
+        status = SafeReadEACMemory(eacDriverBase,
+            nn->eacCodeSnapshot,
+            eacDriverSize);
+
+        if (!NT_SUCCESS(status)) {
+            ExFreePool(nn->eacCodeSnapshot);
+            nn->eacCodeSnapshot = NULL;
+            C2_DBG_PRINT("Failed to create EAC snapshot: 0x%X\n", status);
+            return;
+        }
+    }
+
+    // Start monitoring thread
+    status = CreateManagedThread((PKSTART_ROUTINE)NeuralNetwork_EvadeDetection, nn);
+    if (!NT_SUCCESS(status)) {
+        C2_DBG_PRINT("Failed to create monitoring thread: 0x%X\n", status);
+    }
 
     C2_DBG_PRINT("Monitoring EAC driver at %p, size %llu\n", eacDriverBase, eacDriverSize);
 }
@@ -932,7 +1207,7 @@ void NeuralNetwork_AnalyzeEACBehavior(NeuralNetwork* nn) {
                     detectedPatterns[detectedCount].frequency++;
                     detectedCount++;
 
-                    AnalyzePatternContext(nn, eacCurrent + i, p);
+                    AnalyzePatternContextEx(nn, eacCurrent + i, p);
                 }
             }
         }

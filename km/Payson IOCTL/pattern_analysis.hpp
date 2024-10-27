@@ -3,6 +3,15 @@
 #include "nn.h"
 
 
+
+
+#define PATTERN_TYPE_MEMORY_SCAN      0x01
+#define PATTERN_TYPE_ADDRESS_VALIDATION 0x02
+#define PATTERN_TYPE_THREAD_ANALYSIS    0x03
+#define PATTERN_TYPE_MODULE_VALIDATION  0x04
+
+
+
 static float fast_log2(float x) {
     union {
         float f;
@@ -39,8 +48,36 @@ struct PatternStatistics {
     SIZE_T avgOffset;
 };
 
+typedef struct _PATTERN_ANALYSIS_CONTEXT {
+    KSPIN_LOCK Lock;
+    PUCHAR SafeBuffer;
+    SIZE_T BufferSize;
+    BOOLEAN Initialized;
+} PATTERN_ANALYSIS_CONTEXT, * PPATTERN_ANALYSIS_CONTEXT;
 
-void AnalyzePatternContext(NeuralNetwork* nn, UCHAR* location, ULONG patternType);
+
+
+typedef enum _DEFERRED_ACTION {
+    ACTION_ADAPT_TECHNIQUES = 0,
+    ACTION_OBFUSCATE_MEMORY,
+    ACTION_PROTECT_THREAD,
+    ACTION_HIDE_SELF,
+    ACTION_MAX
+} DEFERRED_ACTION;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+    NTSTATUS QueueDeferredAction(NeuralNetwork* nn, DEFERRED_ACTION Action);
+
+#ifdef __cplusplus
+}
+#endif
+
+NTSTATUS InitializePatternAnalysisBuffers(void);
+NTSTATUS AnalyzePatternContextEx(NeuralNetwork* nn, UCHAR* location, ULONG patternType);
+void CleanupPatternAnalysisContext(void);
 void AnalyzePatternDistribution(NeuralNetwork* nn, void* patterns, ULONG count);
 BOOLEAN IsMemoryScanningSequence(UCHAR* bytes);
 BOOLEAN IsAddressValidationSequence(UCHAR* bytes);
@@ -49,9 +86,15 @@ BOOLEAN IsModuleValidationSequence(UCHAR* bytes);
 BOOLEAN IsPeriodicPattern(SIZE_T offset);
 void ProtectThreadContext(NeuralNetwork* nn);
 void AdjustTimingBehavior(NeuralNetwork* nn);
+
+NTSTATUS InitializeEACMonitoring(void);
+VOID EACMonitorDpcRoutine(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+void CleanupEACMonitoring(void);
+NTSTATUS RegisterEACRegion(PVOID BaseAddress, SIZE_T Size, BOOLEAN IsExecutable);
+NTSTATUS SafeReadEACMemory(PVOID TargetAddress, PVOID Buffer, SIZE_T Size);
 BOOLEAN IsEACPattern(PUCHAR Address, SIZE_T Size);
 void UpdateEACPatterns();
-NTSTATUS InitializePatternAnalysis();
+NTSTATUS InitializePatternAnalysis(void);
 
 // EAC-specific
 static const DetectionPattern DETECTION_PATTERNS[] = {

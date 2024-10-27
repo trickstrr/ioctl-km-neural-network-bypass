@@ -2,13 +2,20 @@
 
 #include <ntddk.h>
 
+
+#define MAX_MANAGED_THREADS 16
+#define MAX_HOOKS 10
+
 typedef struct _NeuralNetwork {
     int inputNodes;
     int hiddenNodes;
     int outputNodes;
 
+
     float* weightsInputHidden;
     float* weightsHiddenOutput;
+    KSPIN_LOCK weightLock;
+
     float* biasHidden;
     float* biasOutput;
 
@@ -52,7 +59,15 @@ typedef struct _NeuralNetwork {
 
 } NeuralNetwork;
 
-#define MAX_HOOKS 10
+typedef struct _THREAD_CONTEXT {
+    HANDLE ThreadHandle;
+    PKTHREAD Thread;
+    KEVENT StopEvent;
+    BOOLEAN Stopping;
+    PVOID Context;
+    PKSTART_ROUTINE ThreadRoutine;
+} THREAD_CONTEXT, * PTHREAD_CONTEXT;
+
 typedef struct _HOOK_DATA {
     PVOID OriginalFunction;
     PVOID HookFunction;
@@ -63,6 +78,13 @@ typedef struct _HOOK_DATA {
 extern HOOK_DATA g_Hooks[MAX_HOOKS];
 extern INT g_HookCount;
 extern NeuralNetwork* g_neuralNetwork;
+
+
+//thread manager
+NTSTATUS CreateManagedThread(PKSTART_ROUTINE StartRoutine, PVOID Context);
+NTSTATUS InitializeThreadManager(void);
+void CleanupThreadManager(void);
+BOOLEAN ShouldThreadStop(void);
 
 
 NeuralNetwork* NeuralNetwork_Create(int inputNodes, int hiddenNodes, int outputNodes);

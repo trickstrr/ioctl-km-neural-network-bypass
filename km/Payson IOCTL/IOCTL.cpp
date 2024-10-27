@@ -587,7 +587,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 
     // Initialize monitoring and protection
     NeuralNetwork_MonitorEAC(g_neuralNetwork, eacDriverBase, eacDriverSize);
-    NeuralNetwork_InitializeStealthHooks(g_neuralNetwork);
+    //NeuralNetwork_InitializeStealthHooks(g_neuralNetwork);  //need to be implemented 
     NeuralNetwork_AdaptSelf(g_neuralNetwork, DriverObject->DriverStart, DriverObject->DriverSize);
 
     // Apply protection layers

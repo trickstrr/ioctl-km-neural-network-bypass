@@ -4,8 +4,41 @@
 #include <intrin.h>
 #include <stdlib.h>
 
+#define MAX_EAC_REGIONS 128
+#define EAC_SCAN_INTERVAL 1000 // 1 sec
+
+
 
 extern "C" ULONG NTAPI RtlRandomEx(PULONG Seed);
+
+
+typedef struct _DEFERRED_ACTION_ITEM {
+    WORK_QUEUE_ITEM WorkItem;
+    NeuralNetwork* Network;
+    DEFERRED_ACTION Action;
+} DEFERRED_ACTION_ITEM, * PDEFERRED_ACTION_ITEM;
+
+typedef struct _EAC_MEMORY_REGION {
+    PVOID BaseAddress;
+    SIZE_T Size;
+    ULONG Protection;
+    BOOLEAN IsExecutable;
+    BOOLEAN IsModified;
+    ULONG LastAccessTime;
+} EAC_MEMORY_REGION, * PEAC_MEMORY_REGION;
+
+typedef struct _EAC_MONITOR_CONTEXT {
+    KSPIN_LOCK Lock;
+    EAC_MEMORY_REGION* Regions;
+    ULONG RegionCount;
+    ULONG MaxRegions;
+    BOOLEAN IsMonitoring;
+    KDPC MonitorDpc;
+    KTIMER MonitorTimer;
+    ULONG ScanInterval;
+} EAC_MONITOR_CONTEXT, * PEAC_MONITOR_CONTEXT;
+
+
 
 UCHAR PATTERN_MASKS_SEQ[] = {
     0xFF, 0xFF, 0xFF, 0x00, // First 3 bytes must match, 4th can vary
@@ -17,45 +50,56 @@ UCHAR PATTERN_MASKS_SEQ[] = {
 static SIZE_T g_LastPatternOffset = 0;
 static SIZE_T g_PatternInterval = 0;
 static LARGE_INTEGER g_LastTimingAdjustment = { 0 };
+static PATTERN_ANALYSIS_CONTEXT g_PatternContext = { 0 };
+static EAC_MONITOR_CONTEXT g_EacMonitor = { 0 };
 
-void AnalyzePatternContext(NeuralNetwork* nn, UCHAR* location, ULONG patternType) {
-    if (!nn || !location) return;
+NTSTATUS InitializePatternAnalysisBuffers(void) {
+    if (!g_PatternContext.Initialized) {
+        KeInitializeSpinLock(&g_PatternContext.Lock);
+        g_PatternContext.BufferSize = PAGE_SIZE;
+        g_PatternContext.SafeBuffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+            g_PatternContext.BufferSize,
+            'PATB');
+        if (!g_PatternContext.SafeBuffer) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        g_PatternContext.Initialized = TRUE;
+    }
+    return STATUS_SUCCESS;
+}
+
+void CleanupPatternAnalysisContext(void) {
+    if (g_PatternContext.SafeBuffer) {
+        ExFreePool(g_PatternContext.SafeBuffer);
+        g_PatternContext.SafeBuffer = NULL;
+    }
+    g_PatternContext.Initialized = FALSE;
+}
+
+static void ExecuteDeferredAction(PVOID Parameter) {
+    PDEFERRED_ACTION_ITEM item = (PDEFERRED_ACTION_ITEM)Parameter;
+
+    if (!item || !item->Network) {
+        if (item) ExFreePool(item);
+        return;
+    }
 
     __try {
-        // Create a safe buffer for analysis
-        UCHAR surroundingBytes[32];
-        SIZE_T safeOffset = (location - 16 >= (UCHAR*)nn->eacDriverBase) ? 16 : 0;
-        RtlZeroMemory(surroundingBytes, sizeof(surroundingBytes));
-        RtlCopyMemory(surroundingBytes, location - safeOffset, min(32, nn->eacDriverSize - ((SIZE_T)location - (SIZE_T)nn->eacDriverBase)));
-
-        switch (patternType) {
-        case 0: // Memory Read Pattern
-            if (IsMemoryScanningSequence(surroundingBytes)) {
-                nn->detectionAttemptObserved = TRUE;
-                NeuralNetwork_AdaptTechniques(nn);
-                C2_DBG_PRINT("Memory scanning sequence detected\n");
-            }
+        switch (item->Action) {
+        case ACTION_ADAPT_TECHNIQUES:
+            NeuralNetwork_AdaptTechniques(item->Network);
             break;
 
-        case 1: // Memory Address Load
-            if (IsAddressValidationSequence(surroundingBytes)) {
-                NeuralNetwork_ObfuscateMemory(nn);
-                C2_DBG_PRINT("Address validation sequence detected\n");
-            }
+        case ACTION_OBFUSCATE_MEMORY:
+            NeuralNetwork_ObfuscateMemory(item->Network);
             break;
 
-        case 2: // Thread Context Access
-            if (IsThreadAnalysisSequence(surroundingBytes)) {
-                ProtectThreadContext(nn);
-                C2_DBG_PRINT("Thread analysis sequence detected\n");
-            }
+        case ACTION_PROTECT_THREAD:
+            ProtectThreadContext(item->Network);
             break;
 
-        case 3: // Module List Access
-            if (IsModuleValidationSequence(surroundingBytes)) {
-                NeuralNetwork_HideSelf(nn);
-                C2_DBG_PRINT("Module validation sequence detected\n");
-            }
+        case ACTION_HIDE_SELF:
+            NeuralNetwork_HideSelf(item->Network);
             break;
 
         default:
@@ -63,9 +107,134 @@ void AnalyzePatternContext(NeuralNetwork* nn, UCHAR* location, ULONG patternType
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        C2_DBG_PRINT("Exception in AnalyzePatternContext: 0x%X\n", GetExceptionCode());
+        C2_DBG_PRINT("Exception in ExecuteDeferredAction: 0x%X\n", GetExceptionCode());
     }
+
+    ExFreePool(item);
 }
+
+NTSTATUS QueueDeferredAction(NeuralNetwork* nn, DEFERRED_ACTION Action) {
+    if (!nn) return STATUS_INVALID_PARAMETER;
+
+    // Allocate work item context
+    PDEFERRED_ACTION_ITEM actionItem = (PDEFERRED_ACTION_ITEM)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(DEFERRED_ACTION_ITEM),
+        'DFAC'
+    );
+
+    if (!actionItem) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    // Initialize work item
+    actionItem->Network = nn;
+    actionItem->Action = Action;
+
+    ExInitializeWorkItem(
+        &actionItem->WorkItem,
+        ExecuteDeferredAction,
+        actionItem
+    );
+
+    // Queue the work item
+    ExQueueWorkItem(&actionItem->WorkItem, DelayedWorkQueue);
+
+    return STATUS_SUCCESS;
+}
+
+
+NTSTATUS AnalyzePatternContextEx(NeuralNetwork* nn, UCHAR* location, ULONG patternType) 
+{
+    if (!nn || !location || !g_PatternContext.Initialized) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    NTSTATUS status = STATUS_SUCCESS;
+    KIRQL oldIrql;
+    ULONG analyzedLength = 0;
+
+    KeAcquireSpinLock(&g_PatternContext.Lock, &oldIrql);
+
+    __try {
+        // Validate location is within EAC driver range
+        if ((ULONG_PTR)location < (ULONG_PTR)nn->eacDriverBase ||
+            (ULONG_PTR)location >= (ULONG_PTR)nn->eacDriverBase + nn->eacDriverSize) {
+            status = STATUS_INVALID_ADDRESS;
+            __leave;
+        }
+
+        // Calculate safe boundaries
+        SIZE_T maxOffset = min(16, (ULONG_PTR)location - (ULONG_PTR)nn->eacDriverBase);
+        SIZE_T safeOffset = (location - 16 >= (UCHAR*)nn->eacDriverBase) ? 16 : maxOffset;
+        SIZE_T safeLength = min(32, nn->eacDriverSize -
+            ((SIZE_T)location - (SIZE_T)nn->eacDriverBase + safeOffset));
+
+        if (safeLength == 0) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            __leave;
+        }
+
+        // Clear analysis buffer
+        RtlZeroMemory(g_PatternContext.SafeBuffer, g_PatternContext.BufferSize);
+
+        // Safe memory probe and copy
+        ProbeForRead(location - safeOffset, safeLength, 1);
+        MM_COPY_ADDRESS sourceAddress;
+        sourceAddress.VirtualAddress = location - safeOffset;
+        status = MmCopyMemory(g_PatternContext.SafeBuffer,
+            sourceAddress,
+            safeLength,
+            MM_COPY_MEMORY_VIRTUAL,
+            (PSIZE_T)&analyzedLength);
+
+        if (!NT_SUCCESS(status) || analyzedLength == 0) {
+            __leave;
+        }
+
+        // Pattern analysis based on type
+        switch (patternType) {
+        case PATTERN_TYPE_MEMORY_SCAN:
+            if (IsMemoryScanningSequence(g_PatternContext.SafeBuffer)) {
+                InterlockedIncrement((volatile LONG*)&nn->eacDetectionCount);
+                nn->detectionAttemptObserved = TRUE;
+                QueueDeferredAction(nn, ACTION_ADAPT_TECHNIQUES);
+            }
+            break;
+
+        case PATTERN_TYPE_ADDRESS_VALIDATION:
+            if (IsAddressValidationSequence(g_PatternContext.SafeBuffer)) {
+                QueueDeferredAction(nn, ACTION_OBFUSCATE_MEMORY);
+            }
+            break;
+
+        case PATTERN_TYPE_THREAD_ANALYSIS:
+            if (IsThreadAnalysisSequence(g_PatternContext.SafeBuffer)) {
+                QueueDeferredAction(nn, ACTION_PROTECT_THREAD);
+            }
+            break;
+
+        case PATTERN_TYPE_MODULE_VALIDATION:
+            if (IsModuleValidationSequence(g_PatternContext.SafeBuffer)) {
+                QueueDeferredAction(nn, ACTION_HIDE_SELF);
+            }
+            break;
+        }
+
+        // Record pattern for later analysis
+        RecordPatternMatch(patternType, (SIZE_T)(location - (UCHAR*)nn->eacDriverBase),
+            analyzedLength);
+
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        C2_DBG_PRINT("Exception in AnalyzePatternContext: 0x%X\n", status);
+    }
+
+    KeReleaseSpinLock(&g_PatternContext.Lock, oldIrql);
+    return status;
+}
+    
 
 void AnalyzePatternDistribution(NeuralNetwork* nn, void* patterns, ULONG count) {
     if (!nn || !patterns || count == 0) return;
@@ -73,6 +242,7 @@ void AnalyzePatternDistribution(NeuralNetwork* nn, void* patterns, ULONG count) 
     __try {
         PatternStatistics statistics[10] = { 0 };
         DetectedPattern* detectedPatterns = (DetectedPattern*)patterns;
+
 
         // Calculate pattern distribution statistics
         for (ULONG i = 0; i < count; i++) {
@@ -197,6 +367,205 @@ void AdjustTimingBehavior(NeuralNetwork* nn) {
     }
 }
 
+VOID EACMonitorDpcRoutine( PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2) {
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_EacMonitor.Lock, &oldIrql);
+
+    for (ULONG i = 0; i < g_EacMonitor.RegionCount; i++) {
+        PEAC_MEMORY_REGION region = &g_EacMonitor.Regions[i];
+
+        __try {
+            // Verify memory contents
+            PUCHAR buffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                region->Size,
+                'EACV');
+            if (buffer) {
+                ProbeForRead(region->BaseAddress, region->Size, 1);
+
+                MM_COPY_ADDRESS sourceAddress;
+                sourceAddress.VirtualAddress = region->BaseAddress;
+                SIZE_T bytesRead;
+
+                NTSTATUS status = MmCopyMemory(
+                    buffer,
+                    sourceAddress,
+                    region->Size,
+                    MM_COPY_MEMORY_VIRTUAL,
+                    &bytesRead
+                );
+
+                if (NT_SUCCESS(status) && bytesRead == region->Size) {
+                    // Check for modifications
+                    if (region->IsExecutable) {
+                        for (SIZE_T j = 0; j < region->Size; j++) {
+                            if (((PUCHAR)region->BaseAddress)[j] != buffer[j]) {
+                                region->IsModified = TRUE;
+                                C2_DBG_PRINT("EAC region modification detected at offset %llu\n", j);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                ExFreePool(buffer);
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            region->Protection = 0;  // Mark as invalid
+        }
+    }
+
+    // Requeue timer if still monitoring
+    if (g_EacMonitor.IsMonitoring) {
+        LARGE_INTEGER dueTime;
+        dueTime.QuadPart = -10000LL * g_EacMonitor.ScanInterval;  // Convert to 100ns intervals
+        KeSetTimer(&g_EacMonitor.MonitorTimer, dueTime, &g_EacMonitor.MonitorDpc);
+    }
+
+    KeReleaseSpinLock(&g_EacMonitor.Lock, oldIrql);
+}
+
+NTSTATUS InitializeEACMonitoring(void) {
+    if (g_EacMonitor.Regions) {
+        return STATUS_ALREADY_INITIALIZED;
+    }
+
+    g_EacMonitor.Regions = (PEAC_MEMORY_REGION)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(EAC_MEMORY_REGION) * MAX_EAC_REGIONS,
+        'EACM'
+    );
+
+    if (!g_EacMonitor.Regions) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(g_EacMonitor.Regions, sizeof(EAC_MEMORY_REGION) * MAX_EAC_REGIONS);
+
+    KeInitializeSpinLock(&g_EacMonitor.Lock);
+    g_EacMonitor.MaxRegions = MAX_EAC_REGIONS;
+    g_EacMonitor.RegionCount = 0;
+    g_EacMonitor.ScanInterval = EAC_SCAN_INTERVAL;
+
+    // Initialize DPC and Timer for periodic monitoring
+    KeInitializeDpc(&g_EacMonitor.MonitorDpc, EACMonitorDpcRoutine, NULL);
+    KeInitializeTimer(&g_EacMonitor.MonitorTimer);
+
+    return STATUS_SUCCESS;
+}
+
+void CleanupEACMonitoring(void) {
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_EacMonitor.Lock, &oldIrql);
+
+    if (g_EacMonitor.IsMonitoring) {
+        KeCancelTimer(&g_EacMonitor.MonitorTimer);
+        g_EacMonitor.IsMonitoring = FALSE;
+    }
+
+    if (g_EacMonitor.Regions) {
+        ExFreePool(g_EacMonitor.Regions);
+        g_EacMonitor.Regions = NULL;
+    }
+
+    g_EacMonitor.RegionCount = 0;
+    KeReleaseSpinLock(&g_EacMonitor.Lock, oldIrql);
+}
+
+
+
+NTSTATUS RegisterEACRegion(PVOID BaseAddress, SIZE_T Size, BOOLEAN IsExecutable) {
+    if (!BaseAddress || !Size) {
+        return STATUS_INVALID_PARAMETER;
+     }
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_EacMonitor.Lock, &oldIrql);
+
+    if (g_EacMonitor.RegionCount >= g_EacMonitor.MaxRegions) {
+        KeReleaseSpinLock(&g_EacMonitor.Lock, oldIrql);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    PEAC_MEMORY_REGION region = &g_EacMonitor.Regions[g_EacMonitor.RegionCount++];
+    region->BaseAddress = BaseAddress;
+    region->Size = Size;
+    region->IsExecutable = IsExecutable;
+    region->IsModified = FALSE;
+    region->LastAccessTime = 0;
+
+    // Start monitoring if this is the first region
+    if (g_EacMonitor.RegionCount == 1 && !g_EacMonitor.IsMonitoring) {
+        g_EacMonitor.IsMonitoring = TRUE;
+        LARGE_INTEGER dueTime;
+        dueTime.QuadPart = -10000LL * g_EacMonitor.ScanInterval;
+        KeSetTimer(&g_EacMonitor.MonitorTimer, dueTime, &g_EacMonitor.MonitorDpc);
+    }
+
+    KeReleaseSpinLock(&g_EacMonitor.Lock, oldIrql);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS SafeReadEACMemory(PVOID TargetAddress, PVOID Buffer, SIZE_T Size) {
+    if (!TargetAddress || !Buffer || !Size) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    NTSTATUS status = STATUS_SUCCESS;
+    PMDL mdl = NULL;
+    PVOID mappedAddress = NULL;
+
+    __try {
+        // Create MDL for the target address
+        mdl = IoAllocateMdl(TargetAddress, (ULONG)Size, FALSE, FALSE, NULL);
+        if (!mdl) {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        ProbeForRead(TargetAddress, Size, 1);
+        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+
+        mappedAddress = MmMapLockedPagesSpecifyCache(
+            mdl,
+            KernelMode,
+            MmNonCached,
+            NULL,
+            FALSE,
+            NormalPagePriority
+        );
+
+        if (!mappedAddress) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            __leave;
+        }
+
+        // Safe copy
+        RtlCopyMemory(Buffer, mappedAddress, Size);
+
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+    }
+
+    if (mappedAddress) {
+        MmUnmapLockedPages(mappedAddress, mdl);
+    }
+
+    if (mdl) {
+        MmUnlockPages(mdl);
+        IoFreeMdl(mdl);
+    }
+
+    return status;
+}
+
+
+
 BOOLEAN IsEACPattern(PUCHAR Address, SIZE_T Size) {
     if (!Address || Size < 7) return FALSE;
 
@@ -315,10 +684,20 @@ BOOLEAN VerifyPatternIntegrity() {
 
 // Initialize pattern analysis system
 NTSTATUS InitializePatternAnalysis() {
+    NTSTATUS status;
+
+    // Initialize pattern integrity
     if (!VerifyPatternIntegrity()) {
         return STATUS_INVALID_PARAMETER;
     }
 
+    // Initialize buffers
+    status = InitializePatternAnalysisBuffers();
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // Initialize globals
     g_LastPatternOffset = 0;
     g_PatternInterval = 0;
     g_LastTimingAdjustment.QuadPart = 0;
