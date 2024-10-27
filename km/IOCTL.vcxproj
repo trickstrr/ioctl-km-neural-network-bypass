@@ -170,11 +170,13 @@ $(DDK_LIB_PATH)hal.lib
     <ClCompile Include="Payson IOCTL\IOCTL.cpp" />
     <ClCompile Include="Payson IOCTL\jnk.cpp" />
     <ClCompile Include="Payson IOCTL\nn.cpp" />
+    <ClCompile Include="Payson IOCTL\pattern_analysis.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Payson IOCTL\c2_comm.h" />
     <ClInclude Include="Payson IOCTL\eac.h" />
     <ClInclude Include="Payson IOCTL\nn.h" />
+    <ClInclude Include="Payson IOCTL\pattern_analysis.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

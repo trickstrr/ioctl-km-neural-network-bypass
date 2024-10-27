@@ -27,6 +27,9 @@
     <ClCompile Include="Payson IOCTL\c2_comm.cpp">
       <Filter>main\nn\c2</Filter>
     </ClCompile>
+    <ClCompile Include="Payson IOCTL\pattern_analysis.cpp">
+      <Filter>main\nn\features</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Payson IOCTL\nn.h">
@@ -37,6 +40,9 @@
     </ClInclude>
     <ClInclude Include="Payson IOCTL\c2_comm.h">
       <Filter>main\nn\c2</Filter>
+    </ClInclude>
+    <ClInclude Include="Payson IOCTL\pattern_analysis.hpp">
+      <Filter>main\nn\features</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

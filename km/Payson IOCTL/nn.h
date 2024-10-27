@@ -118,6 +118,7 @@ BOOLEAN NeuralNetwork_IsOperationSafe(NeuralNetwork* nn);
 void NeuralNetwork_AdjustBehavior(NeuralNetwork* nn);
 
 // Helper functions
+
 float NeuralNetwork_Sigmoid(float x);
 float NeuralNetwork_SigmoidDerivative(float x);
 ULONG RotateLeft(ULONG value, UCHAR shift);

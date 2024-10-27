@@ -4,6 +4,8 @@
 #include <ntstrsafe.h>
 #include <intrin.h>
 
+#include "pattern_analysis.hpp"
+#include "c2_comm.h"
 #include "nn.h"
 
 
@@ -633,7 +635,7 @@ void NeuralNetwork_DeobfuscateCode(NeuralNetwork* nn, PVOID targetAddress, SIZE_
         MmUnlockPages(mdl);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("Exception while deobfuscating code: %08X\n", GetExceptionCode());
+        C2_DBG_PRINT("Exception while deobfuscating code: %08X\n", GetExceptionCode());
     }
 
     IoFreeMdl(mdl);
@@ -657,7 +659,7 @@ void NeuralNetwork_MonitorEAC(NeuralNetwork* nn, PVOID eacDriverBase, SIZE_T eac
     PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
         (PKSTART_ROUTINE)NeuralNetwork_EvadeDetection, nn);
 
-    DbgPrint("Monitoring EAC driver at %p, size %llu\n", eacDriverBase, eacDriverSize);
+    C2_DBG_PRINT("Monitoring EAC driver at %p, size %llu\n", eacDriverBase, eacDriverSize);
 }
 
 PVOID FindEacFunction(PVOID EacBase, const char* FunctionName) {
@@ -720,7 +722,7 @@ void NeuralNetwork_AdaptSelf(NeuralNetwork* nn, PVOID ownDriverBase, SIZE_T ownD
         UCHAR* snapshotEACCode = nn->eacCodeSnapshot + i;
 
         if (memcmp(currentEACCode, snapshotEACCode, PAGE_SIZE) != 0) {
-            DbgPrint("Detected EAC code change at offset %llu\n", i);
+            C2_DBG_PRINT("Detected EAC code change at offset %llu\n", i);
 
         
             UCHAR* newCode = (UCHAR*)NeuralNetwork_AllocateMemory(PAGE_SIZE);
@@ -783,7 +785,7 @@ void NeuralNetwork_RewriteOwnCode(NeuralNetwork* nn, PVOID targetAddress, UCHAR*
         MmUnlockPages(mdl);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("Exception while rewriting own code: %08X\n", GetExceptionCode());
+        C2_DBG_PRINT("Exception while rewriting own code: %08X\n", GetExceptionCode());
     }
 
     IoFreeMdl(mdl);
@@ -902,17 +904,44 @@ void NeuralNetwork_EvadeDetection(NeuralNetwork* nn) {
 }
 
 void NeuralNetwork_AnalyzeEACBehavior(NeuralNetwork* nn) {
-   
     UCHAR* eacCurrent = (UCHAR*)nn->eacDriverBase;
-    for (SIZE_T i = 0; i < nn->eacDriverSize; i++) {
+    static ULONG patternMatchCount = 0;
+    DetectedPattern detectedPatterns[100] = { 0 };
+    ULONG detectedCount = 0;
+
+    for (SIZE_T i = 0; i < nn->eacDriverSize - 16; i++) {
         if (eacCurrent[i] != nn->eacCodeSnapshot[i]) {
-            // EAC code has changed, analyze the change
-            DbgPrint("EAC code change detected at offset %llu\n", i);
-            // Implement analysis logic here
-            // For example, look for specific patterns that indicate new detection methods <<<<< reminder
+            C2_DBG_PRINT("EAC code change detected at offset %llu\n", i);
+
+            for (ULONG p = 0; p < ARRAYSIZE(DETECTION_PATTERNS); p++) {
+                BOOLEAN patternMatch = TRUE;
+                for (SIZE_T j = 0; j < DETECTION_PATTERNS[p].length; j++) {
+                    if (DETECTION_PATTERNS[p].pattern[j] != 0xFF &&
+                        eacCurrent[i + j] != DETECTION_PATTERNS[p].pattern[j]) {
+                        patternMatch = FALSE;
+                        break;
+                    }
+                }
+
+                if (patternMatch) {
+                    C2_DBG_PRINT("Detection pattern found: %s at offset %llu\n",
+                        DETECTION_PATTERNS[p].description, i);
+
+                    detectedPatterns[detectedCount].offset = i;
+                    detectedPatterns[detectedCount].patternType = p;
+                    detectedPatterns[detectedCount].frequency++;
+                    detectedCount++;
+
+                    AnalyzePatternContext(nn, eacCurrent + i, p);
+                }
+            }
         }
     }
-  
+
+    if (detectedCount > 0) {
+        AnalyzePatternDistribution(nn, detectedPatterns, detectedCount);
+    }
+
     RtlCopyMemory(nn->eacCodeSnapshot, nn->eacDriverBase, nn->eacDriverSize);
 }
 
@@ -1073,7 +1102,7 @@ float MeasureActionSuccess(NeuralNetwork* nn, int chosenAction)
 void NeuralNetwork_AdaptTechniques(NeuralNetwork* nn)
 {
     if (!NeuralNetwork_IsOperationSafe(nn)) {
-        DbgPrint("Skipping driver hiding due to low stability score");
+        C2_DBG_PRINT("Skipping driver hiding due to low stability score");
         return;
     }
 
@@ -1688,7 +1717,7 @@ void NeuralNetwork_HideInLegitimateDriver(NeuralNetwork* nn, PDRIVER_OBJECT Driv
     // Allocate new memory in the target driver's memory space
     PVOID newBase = ExAllocatePool2(POOL_FLAG_NON_PAGED, nn->ownDriverSize, 'NNHD');
     if (!newBase) {
-        DbgPrint("Failed to allocate memory for driver hiding\n");
+        C2_DBG_PRINT("Failed to allocate memory for driver hiding\n");
         return;
     }
 
@@ -1712,10 +1741,10 @@ void NeuralNetwork_HideInLegitimateDriver(NeuralNetwork* nn, PDRIVER_OBJECT Driv
         // Obfuscate the newly copied code
         NeuralNetwork_ObfuscateMemory(nn);
 
-        DbgPrint("Driver successfully hidden in %wZ\n", &DriverObject->DriverName);
+        C2_DBG_PRINT("Driver successfully hidden in %wZ\n", &DriverObject->DriverName);
     }
     else {
-        DbgPrint("Failed to get current driver object\n");
+        C2_DBG_PRINT("Failed to get current driver object\n");
         ExFreePool(newBase);
     }
 }

