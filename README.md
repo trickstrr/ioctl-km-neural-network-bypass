@@ -24,7 +24,8 @@ still need some bug fixes that causes some BSODs. (this is not a ready2use Src. 
 it will check each change previously to avoid system crashes. 
 
 
-ToDo:
+# ToDo:
+
 - Implement more EAC hooks
 - pre-training for the NN
 - fix some bugs
