@@ -1224,19 +1224,8 @@ NTSTATUS HookedEacCheckMemory(PVOID Address, SIZE_T Size) {
 }
 
 void NeuralNetwork_InitializeStealthHooks(NeuralNetwork* nn) {
-    PVOID eacBase = nn->eacDriverBase;
-    if (!eacBase) return;
-
-    // reverse the EAC driver to get the correct functions that u want to hook, work in progress here....
-    PVOID eacCheckMemoryFunc = FindEacFunction(eacBase, "EAC::Callbacks::CheckForManualMappedModule");
-    if (eacCheckMemoryFunc) {
-        NeuralNetwork_InstallHook(eacCheckMemoryFunc, HookedEacCheckMemory, &g_Hooks[g_HookCount++]);
-    }
-
-    PVOID eacProcessEnumScan = FindEacFunction(eacBase, "ProcessEnumerationScan");
-    if (eacProcessEnumScan) {
-        NeuralNetwork_InstallHook(eacProcessEnumScan, HookedEacCheckMemory, &g_Hooks[g_HookCount++]);
-    }
+    // Need to add actual EAC function hooks
+    
 
 } //ToDo
 
