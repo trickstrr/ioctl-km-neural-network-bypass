@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="main">
+      <UniqueIdentifier>{c31ca960-3410-427f-a1f6-f18317547086}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="main\nn">
+      <UniqueIdentifier>{6314b888-3136-4b80-871a-11ca23c9d241}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="main\nn\features">
+      <UniqueIdentifier>{057b591e-3444-4fa0-8828-4c519474be5b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="main\nn\c2">
+      <UniqueIdentifier>{73ca2c66-828b-499c-9662-0677319dfd3c}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Payson IOCTL\IOCTL.cpp">
+      <Filter>main</Filter>
+    </ClCompile>
+    <ClCompile Include="Payson IOCTL\jnk.cpp">
+      <Filter>main</Filter>
+    </ClCompile>
+    <ClCompile Include="Payson IOCTL\nn.cpp">
+      <Filter>main\nn</Filter>
+    </ClCompile>
+    <ClCompile Include="Payson IOCTL\c2_comm.cpp">
+      <Filter>main\nn\c2</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Payson IOCTL\nn.h">
+      <Filter>main\nn</Filter>
+    </ClInclude>
+    <ClInclude Include="Payson IOCTL\eac.h">
+      <Filter>main\nn\features</Filter>
+    </ClInclude>
+    <ClInclude Include="Payson IOCTL\c2_comm.h">
+      <Filter>main\nn\c2</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
