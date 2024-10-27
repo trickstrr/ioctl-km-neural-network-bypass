@@ -8,7 +8,7 @@
 
 
 #define SystemModuleInformation 11
-
+#define MAX_NODES 1024
 
 
 typedef struct _IMAGE_DOS_HEADER {
@@ -290,7 +290,7 @@ float log2f(float x) {
     const float b = 0.9893f;
 
     int exp = get_exponent(x);
-    float f = x / (float)(1 << exp);  // Normalized fraction
+    float f = x / (float)(1 << exp);  
 
     // Approximation of log2(1+x) for x in [0, 1]
     float y = (a * f + b) * f - b;
@@ -346,7 +346,7 @@ NeuralNetwork* NeuralNetwork_Create(int inputNodes, int hiddenNodes, int outputN
     nn->biasHidden = (float*)NeuralNetwork_AllocateMemory(hiddenNodes * sizeof(float));
     nn->biasOutput = (float*)NeuralNetwork_AllocateMemory(outputNodes * sizeof(float));
 
-    // Initialize weights and biases with random values
+   
     for (int i = 0; i < inputNodes * hiddenNodes; i++)
         nn->weightsInputHidden[i] = (float)RtlRandomEx(NULL) / MAXULONG;
     for (int i = 0; i < hiddenNodes * outputNodes; i++)
@@ -391,10 +391,10 @@ void NeuralNetwork_StabilityCheck(PKDPC Dpc, PVOID DeferredContext, PVOID System
 
     NeuralNetwork* nn = (NeuralNetwork*)DeferredContext;
 
-    // Update stability score based on crash count and operation count
+   
     nn->stabilityScore = 1.0f - ((float)nn->crashCount / (float)(nn->operationCount + 1));
 
-    // Reset counters
+  
     nn->crashCount = 0;
     nn->operationCount = 0;
 
@@ -446,13 +446,132 @@ float NeuralNetwork_SigmoidDerivative(float x) {
 }
 
 void NeuralNetwork_Train(NeuralNetwork* nn, float* inputs, float* targets, int numSamples) {
-    // ... (implement backpropagation algorithm here)
+    float learningRate = 0.01f;
+
+   
+    float* hiddenLayer = (float*)NeuralNetwork_AllocateMemory(nn->hiddenNodes * sizeof(float));
+    float* outputLayer = (float*)NeuralNetwork_AllocateMemory(nn->outputNodes * sizeof(float));
+    float* hiddenErrors = (float*)NeuralNetwork_AllocateMemory(nn->hiddenNodes * sizeof(float));
+    float* outputErrors = (float*)NeuralNetwork_AllocateMemory(nn->outputNodes * sizeof(float));
+
+    if (!hiddenLayer || !outputLayer || !hiddenErrors || !outputErrors) {
+        goto cleanup;
+    }
+
+    for (int sample = 0; sample < numSamples; sample++) {
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            float sum = nn->biasHidden[i];
+            for (int j = 0; j < nn->inputNodes; j++) {
+                sum += inputs[j] * nn->weightsInputHidden[j * nn->hiddenNodes + i];
+            }
+            hiddenLayer[i] = NeuralNetwork_Sigmoid(sum);
+        }
+
+        for (int i = 0; i < nn->outputNodes; i++) {
+            float sum = nn->biasOutput[i];
+            for (int j = 0; j < nn->hiddenNodes; j++) {
+                sum += hiddenLayer[j] * nn->weightsHiddenOutput[j * nn->outputNodes + i];
+            }
+            outputLayer[i] = NeuralNetwork_Sigmoid(sum);
+        }
+
+
+        for (int i = 0; i < nn->outputNodes; i++) {
+            float error = targets[i] - outputLayer[i];
+            outputErrors[i] = error * NeuralNetwork_SigmoidDerivative(outputLayer[i]);
+        }
+
+
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            float error = 0.0f;
+            for (int j = 0; j < nn->outputNodes; j++) {
+                error += outputErrors[j] * nn->weightsHiddenOutput[i * nn->outputNodes + j];
+            }
+            hiddenErrors[i] = error * NeuralNetwork_SigmoidDerivative(hiddenLayer[i]);
+        }
+
+
+        static float prevWeightUpdateIH[MAX_NODES * MAX_NODES] = { 0 };
+        static float prevWeightUpdateHO[MAX_NODES * MAX_NODES] = { 0 };
+        float momentum = 0.9f;
+
+      
+        for (int i = 0; i < nn->inputNodes; i++) {
+            for (int j = 0; j < nn->hiddenNodes; j++) {
+                int idx = i * nn->hiddenNodes + j;
+                float weightUpdate = learningRate * hiddenErrors[j] * inputs[i];
+                weightUpdate += momentum * prevWeightUpdateIH[idx];
+                nn->weightsInputHidden[idx] += weightUpdate;
+                prevWeightUpdateIH[idx] = weightUpdate;
+            }
+        }
+
+   
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            for (int j = 0; j < nn->outputNodes; j++) {
+                int idx = i * nn->outputNodes + j;
+                float weightUpdate = learningRate * outputErrors[j] * hiddenLayer[i];
+                weightUpdate += momentum * prevWeightUpdateHO[idx];
+                nn->weightsHiddenOutput[idx] += weightUpdate;
+                prevWeightUpdateHO[idx] = weightUpdate;
+            }
+        }
+
+       
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            nn->biasHidden[i] += learningRate * hiddenErrors[i];
+        }
+        for (int i = 0; i < nn->outputNodes; i++) {
+            nn->biasOutput[i] += learningRate * outputErrors[i];
+        }
+
+    
+        ULONG seed = (ULONG)__rdtsc();
+        float dropoutRate = 0.2f;
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            if ((float)RtlRandomEx(&seed) / MAXULONG < dropoutRate) {
+                hiddenLayer[i] = 0.0f;
+            }
+        }
+
+       
+        float weightDecay = 0.0001f;
+        for (int i = 0; i < nn->inputNodes * nn->hiddenNodes; i++) {
+            nn->weightsInputHidden[i] *= (1.0f - weightDecay);
+        }
+        for (int i = 0; i < nn->hiddenNodes * nn->outputNodes; i++) {
+            nn->weightsHiddenOutput[i] *= (1.0f - weightDecay);
+        }
+
+
+        float maxGradientNorm = 1.0f;
+        for (int i = 0; i < nn->hiddenNodes; i++) {
+            if (abs_float(hiddenErrors[i]) > maxGradientNorm) {
+                hiddenErrors[i] = (hiddenErrors[i] > 0) ? maxGradientNorm : -maxGradientNorm;
+            }
+        }
+        for (int i = 0; i < nn->outputNodes; i++) {
+            if (abs_float(outputErrors[i]) > maxGradientNorm) {
+                outputErrors[i] = (outputErrors[i] > 0) ? maxGradientNorm : -maxGradientNorm;
+            }
+        }
+
+      
+        if (sample % 10 == 0) {  
+            NeuralNetwork_IncreaseObfuscation(nn);
+        }
+    }
+
+cleanup:
+    if (hiddenLayer) NeuralNetwork_FreeMemory(hiddenLayer);
+    if (outputLayer) NeuralNetwork_FreeMemory(outputLayer);
+    if (hiddenErrors) NeuralNetwork_FreeMemory(hiddenErrors);
+    if (outputErrors) NeuralNetwork_FreeMemory(outputErrors);
 }
 
 void NeuralNetwork_Predict(NeuralNetwork* nn, float* inputs, float* outputs) {
     float* hiddenLayer = (float*)NeuralNetwork_AllocateMemory(nn->hiddenNodes * sizeof(float));
 
-    // Calculate hidden layer
     for (int i = 0; i < nn->hiddenNodes; i++) {
         hiddenLayer[i] = nn->biasHidden[i];
         for (int j = 0; j < nn->inputNodes; j++) {
@@ -461,7 +580,6 @@ void NeuralNetwork_Predict(NeuralNetwork* nn, float* inputs, float* outputs) {
         hiddenLayer[i] = NeuralNetwork_Sigmoid(hiddenLayer[i]);
     }
 
-    // Calculate output layer
     for (int i = 0; i < nn->outputNodes; i++) {
         outputs[i] = nn->biasOutput[i];
         for (int j = 0; j < nn->hiddenNodes; j++) {
@@ -474,7 +592,7 @@ void NeuralNetwork_Predict(NeuralNetwork* nn, float* inputs, float* outputs) {
 }
 
 void NeuralNetwork_ObfuscateMemory(NeuralNetwork* nn) {
-    // XOR the memory contents with a random key
+    
     ULONG key = RtlRandomEx(NULL);
     for (SIZE_T i = 0; i < sizeof(NeuralNetwork); i++) {
         ((PUCHAR)nn)[i] ^= ((PUCHAR)&key)[i % sizeof(ULONG)];
@@ -492,7 +610,7 @@ void NeuralNetwork_DeobfuscateCode(NeuralNetwork* nn, PVOID targetAddress, SIZE_
 
         PVOID mappedAddress = MmMapLockedPagesSpecifyCache(mdl, KernelMode, MmNonCached, NULL, FALSE, NormalPagePriority);
         if (mappedAddress) {
-            // Disable write protection
+     
             KIRQL oldIrql;
             CR0 cr0;
             oldIrql = KeRaiseIrqlToDpcLevel();
@@ -500,12 +618,11 @@ void NeuralNetwork_DeobfuscateCode(NeuralNetwork* nn, PVOID targetAddress, SIZE_
             cr0.WP = 0;
             __writecr0(cr0.Value);
 
-            // Deobfuscate the code
             for (SIZE_T i = 0; i < codeSize; i++) {
                 ((PUCHAR)mappedAddress)[i] ^= ((PUCHAR)&nn->lastObfuscationKey)[i % sizeof(ULONG)];
             }
 
-            // Re-enable write protection
+     
             cr0.WP = 1;
             __writecr0(cr0.Value);
             KeLowerIrql(oldIrql);
@@ -605,21 +722,19 @@ void NeuralNetwork_AdaptSelf(NeuralNetwork* nn, PVOID ownDriverBase, SIZE_T ownD
         if (memcmp(currentEACCode, snapshotEACCode, PAGE_SIZE) != 0) {
             DbgPrint("Detected EAC code change at offset %llu\n", i);
 
-            // Generate new code based on EAC changes
+        
             UCHAR* newCode = (UCHAR*)NeuralNetwork_AllocateMemory(PAGE_SIZE);
             for (SIZE_T j = 0; j < PAGE_SIZE; j++) {
                 newCode[j] = (UCHAR)(currentEACCode[j] ^ snapshotEACCode[j] ^ nn->ownCodeSnapshot[i + j]);
             }
 
-            // Rewrite own driver code
             NeuralNetwork_RewriteOwnCode(nn, (PVOID)((UCHAR*)nn->ownDriverBase + i), newCode, PAGE_SIZE);
 
             NeuralNetwork_FreeMemory(newCode);
 
-            // Update own code snapshot
             RtlCopyMemory(nn->ownCodeSnapshot + i, (PVOID)((UCHAR*)nn->ownDriverBase + i), PAGE_SIZE);
 
-            // Update EAC snapshot
+         
             RtlCopyMemory(snapshotEACCode, currentEACCode, PAGE_SIZE);
         }
     }
@@ -638,7 +753,7 @@ void NeuralNetwork_RewriteOwnCode(NeuralNetwork* nn, PVOID targetAddress, UCHAR*
 
         PVOID mappedAddress = MmMapLockedPagesSpecifyCache(mdl, KernelMode, MmNonCached, NULL, FALSE, NormalPagePriority);
         if (mappedAddress) {
-            // Disable write protection
+        
             KIRQL oldIrql;
             CR0 cr0;
             oldIrql = KeRaiseIrqlToDpcLevel();
@@ -646,18 +761,18 @@ void NeuralNetwork_RewriteOwnCode(NeuralNetwork* nn, PVOID targetAddress, UCHAR*
             cr0.WP = 0;
             __writecr0(cr0.Value);
 
-            // Rewrite code
+            
             RtlCopyMemory(mappedAddress, newCode, codeSize);
 
-            // Generate a new obfuscation key
+      
             obfuscationKey = RtlRandomEx(NULL);
 
-            // Obfuscate the newly written code
+         
             for (SIZE_T i = 0; i < codeSize; i++) {
                 ((PUCHAR)mappedAddress)[i] ^= ((PUCHAR)&obfuscationKey)[i % sizeof(ULONG)];
             }
 
-            // Re-enable write protection
+        
             cr0.WP = 1;
             __writecr0(cr0.Value);
             KeLowerIrql(oldIrql);
@@ -673,7 +788,7 @@ void NeuralNetwork_RewriteOwnCode(NeuralNetwork* nn, PVOID targetAddress, UCHAR*
 
     IoFreeMdl(mdl);
 
-    // Store the obfuscation key for later use
+
     nn->lastObfuscationKey = obfuscationKey;
 }
 
@@ -701,7 +816,7 @@ void NeuralNetwork_UnhideSelf(NeuralNetwork* nn) {
 
             IoFreeMdl(mdl);
 
-            // Remove this entry from the array
+           
             memmove(&HiddenRegions[i], &HiddenRegions[i + 1], (HiddenRegionCount - i - 1) * sizeof(HIDDEN_MEMORY));
             HiddenRegionCount--;
             break;
@@ -752,7 +867,7 @@ void NeuralNetwork_ConcealMemoryRegion(PVOID start, SIZE_T size) {
     MmBuildMdlForNonPagedPool(mdl);
 
     __try {
-        // Change protection to PAGE_NOACCESS
+        
         MmProtectMdlSystemAddress(mdl, PAGE_NOACCESS);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -763,7 +878,7 @@ void NeuralNetwork_ConcealMemoryRegion(PVOID start, SIZE_T size) {
 //evade
 
 void NeuralNetwork_EvadeDetection(NeuralNetwork* nn) {
-    // Main loop for continuous evasion
+
     LARGE_INTEGER delay;
     delay.QuadPart = -10000000; // 1 second delay in 100-nanosecond intervals
 
@@ -774,7 +889,7 @@ void NeuralNetwork_EvadeDetection(NeuralNetwork* nn) {
 
         for (int i = 0; i < g_HookCount; i++) {
             if (g_Hooks[i].OriginalFunction) {
-                // Check if hook is still valid, reinstall if necessary
+               
                 if (memcmp(g_Hooks[i].OriginalFunction, g_Hooks[i].OriginalBytes, g_Hooks[i].PatchSize) != 0) {
                     NeuralNetwork_InstallHook(g_Hooks[i].OriginalFunction, g_Hooks[i].HookFunction, &g_Hooks[i]);
                 }
@@ -787,17 +902,17 @@ void NeuralNetwork_EvadeDetection(NeuralNetwork* nn) {
 }
 
 void NeuralNetwork_AnalyzeEACBehavior(NeuralNetwork* nn) {
-    // Monitor EAC's memory access patterns
+   
     UCHAR* eacCurrent = (UCHAR*)nn->eacDriverBase;
     for (SIZE_T i = 0; i < nn->eacDriverSize; i++) {
         if (eacCurrent[i] != nn->eacCodeSnapshot[i]) {
             // EAC code has changed, analyze the change
             DbgPrint("EAC code change detected at offset %llu\n", i);
-            // Implement your analysis logic here
-            // For example, you could look for specific patterns that indicate new detection methods
+            // Implement analysis logic here
+            // For example, look for specific patterns that indicate new detection methods <<<<< reminder
         }
     }
-    // Update EAC snapshot
+  
     RtlCopyMemory(nn->eacCodeSnapshot, nn->eacDriverBase, nn->eacDriverSize);
 }
 
@@ -919,31 +1034,31 @@ float MeasureActionSuccess(NeuralNetwork* nn, int chosenAction)
     // Action-specific success metrics
     switch (chosenAction)
     {
-    case 0: // Hide in another driver
+    case 0: 
         if (nn->lastHiddenDriverScore > 0)
         {
             successScore += 0.5f * nn->lastHiddenDriverScore;
         }
         break;
-    case 1: // Obfuscate memory
+    case 1: 
         if (nn->memoryObfuscationLevel > nn->lastMemoryObfuscationLevel)
         {
             successScore += 0.4f;
         }
         break;
-    case 2: // Create decoys
+    case 2: 
         if (nn->decoyCount > nn->lastDecoyCount)
         {
             successScore += 0.3f;
         }
         break;
-    case 3: // Optimize performance
+    case 3: 
         if (nn->performanceScore > nn->lastPerformanceScore)
         {
             successScore += 0.4f;
         }
         break;
-    case 4: // Reduce memory footprint
+    case 4: 
         if (nn->memoryFootprint < nn->lastMemoryFootprint)
         {
             successScore += 0.4f;
@@ -968,14 +1083,14 @@ void NeuralNetwork_AdaptTechniques(NeuralNetwork* nn)
     float inputs[INPUT_NODES];
     float outputs[5];  // Assuming 5 output nodes for different actions
 
-    // Collect input features
+    
     inputs[0] = (float)nn->eacDetectionCount;
     inputs[1] = nn->detectionAttemptObserved ? 1.0f : 0.0f;
     inputs[2] = nn->highCpuUsageObserved ? 1.0f : 0.0f;
     inputs[3] = nn->memoryPressureObserved ? 1.0f : 0.0f;
     inputs[4] = (float)((ULONG_PTR)nn->eacDriverBase & 0xFFFFFFFF);  // Lower 32 bits of EAC base address
     inputs[5] = (float)(nn->eacDriverSize / 1024);  
-    inputs[6] = (float)KeQueryTimeIncrement();  // System timer resolution as a feature
+    inputs[6] = (float)KeQueryTimeIncrement();  
 
     NeuralNetwork_Predict(nn, inputs, outputs);
 
@@ -1042,10 +1157,10 @@ void NeuralNetwork_AdaptTechniques(NeuralNetwork* nn)
         break;
     }
 
-    // Measure the success of the chosen action
+
     float actionSuccess = MeasureActionSuccess(nn, chosenAction);
 
-    // Update the neural network based on the measured success
+
     float targets[5] = { 0 };
     targets[chosenAction] = actionSuccess;
     NeuralNetwork_Train(nn, inputs, targets, 1);
@@ -1083,7 +1198,7 @@ void NeuralNetwork_InitializeStealthHooks(NeuralNetwork* nn) {
     PVOID eacBase = nn->eacDriverBase;
     if (!eacBase) return;
 
-    // reverse the EAC driver to get the correct functions that we want to hook, work in progress here....
+    // reverse the EAC driver to get the correct functions that u want to hook, work in progress here....
     PVOID eacCheckMemoryFunc = FindEacFunction(eacBase, "EAC::Callbacks::CheckForManualMappedModule");
     if (eacCheckMemoryFunc) {
         NeuralNetwork_InstallHook(eacCheckMemoryFunc, HookedEacCheckMemory, &g_Hooks[g_HookCount++]);
@@ -1219,16 +1334,15 @@ void NeuralNetwork_ProcessHookedData(NeuralNetwork* nn, PVOID Data, SIZE_T DataS
         break;
     }
 
-    // Update neural network state
+  
     nn->eacDetectionCount += (NT_SUCCESS(Status) ? 0 : 1);
     nn->lastDetectionTime.QuadPart = currentTime.QuadPart;
 
-    // Train the network based on the outcome
     float targets[5] = { 0 };
-    targets[action] = NT_SUCCESS(Status) ? 1.0f : 0.0f;  // Reinforce action if successful
+    targets[action] = NT_SUCCESS(Status) ? 1.0f : 0.0f;  
     NeuralNetwork_Train(nn, inputs, targets, 1);
 
-    // Adjust behavior based on detection count
+    
     if (nn->eacDetectionCount > nn->lastEacDetectionCount) {
         NeuralNetwork_IncreasedEACMonitoring(nn);
         NeuralNetwork_ApplyPolymorphicObfuscation(nn);
