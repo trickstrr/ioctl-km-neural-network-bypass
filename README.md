@@ -35,6 +35,7 @@ it will check each change previously to avoid system crashes.
 - FindEacFunction currently only has basic PE parsing
 - Need to add EAC-specific function signatures
 - Make it compatible for manual mapping
+- not everything that is init is unloaded, fix that by simply unload the initialized functions/features, dont forget the clean up
 
 # Updates
 
