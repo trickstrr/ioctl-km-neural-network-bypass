@@ -1,10 +1,14 @@
 #pragma once
 
-#include <ntddk.h>
-#include <wsk.h>
-#include <ntstrsafe.h>
+#define NDIS_SUPPORT_NDIS6 1
+#define NDIS60 1
+#define _NDIS_
 
+#include <ntddk.h>
+#include <ntstrsafe.h>
+#include <wsk.h>
 #include "nn.h"
+
 
 // Function prototypes
 NTSTATUS InitializeWskData(void);

@@ -1,3 +1,8 @@
+#define NDIS_SUPPORT_NDIS6 1
+#define NDIS60 1
+#define _NDIS_
+
+
 #include <ntifs.h>
 #include <windef.h>
 #include <intrin.h>

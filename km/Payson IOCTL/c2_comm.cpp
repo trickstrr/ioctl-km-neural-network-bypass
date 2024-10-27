@@ -1,7 +1,7 @@
 #include <ntddk.h>
 #include <wsk.h>
-
 #include <ip2string.h>
+
 #include "nn.h"
 #include "c2_comm.h"
 

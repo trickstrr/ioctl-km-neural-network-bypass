@@ -1,5 +1,9 @@
 #pragma once
 
+#define NDIS_SUPPORT_NDIS6 1
+#define NDIS60 1
+#define _NDIS_
+
 #include <ntddk.h>
 
 

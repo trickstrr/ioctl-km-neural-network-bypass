@@ -1,8 +1,14 @@
-#include "pattern_analysis.hpp"
-#include "c2_comm.h"
+#define NDIS_SUPPORT_NDIS6 1
+#define NDIS60 1
+#define _NDIS_
+
 #include <ntddk.h>
 #include <intrin.h>
 #include <stdlib.h>
+
+#include "pattern_analysis.hpp"
+#include "c2_comm.h"
+#include "mdl_manager.hpp"
 
 #define MAX_EAC_REGIONS 128
 #define EAC_SCAN_INTERVAL 1000 // 1 sec
@@ -521,50 +527,35 @@ NTSTATUS SafeReadEACMemory(PVOID TargetAddress, PVOID Buffer, SIZE_T Size) {
     PVOID mappedAddress = NULL;
 
     __try {
-        // Create MDL for the target address
-        mdl = IoAllocateMdl(TargetAddress, (ULONG)Size, FALSE, FALSE, NULL);
-        if (!mdl) {
-            return STATUS_INSUFFICIENT_RESOURCES;
+        // Use the MDL manager for the core operation
+        status = ProcessMdlOperation(TargetAddress, Buffer, Size);
+        if (!NT_SUCCESS(status)) {
+            C2_DBG_PRINT("MDL operation failed: 0x%X\n", status);
+            return status;
         }
 
-        ProbeForRead(TargetAddress, Size, 1);
-        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+        // Additional EAC-specific validation
+        if (g_PatternContext.Initialized) {
+            // Check if this memory read should be monitored
+            KIRQL oldIrql;
+            KeAcquireSpinLock(&g_PatternContext.Lock, &oldIrql);
 
-        mappedAddress = MmMapLockedPagesSpecifyCache(
-            mdl,
-            KernelMode,
-            MmNonCached,
-            NULL,
-            FALSE,
-            NormalPagePriority
-        );
+            // Fix: Cast Buffer to PUCHAR for IsEACPattern
+            if (IsEACPattern((PUCHAR)Buffer, Size)) {
+                InterlockedIncrement((volatile LONG*)&g_neuralNetwork->eacDetectionCount);
+                NeuralNetwork_IncreasedEACMonitoring(g_neuralNetwork);
+            }
 
-        if (!mappedAddress) {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            __leave;
+            KeReleaseSpinLock(&g_PatternContext.Lock, oldIrql);
         }
-
-        // Safe copy
-        RtlCopyMemory(Buffer, mappedAddress, Size);
-
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
-    }
-
-    if (mappedAddress) {
-        MmUnmapLockedPages(mappedAddress, mdl);
-    }
-
-    if (mdl) {
-        MmUnlockPages(mdl);
-        IoFreeMdl(mdl);
+        C2_DBG_PRINT("Exception in SafeReadEACMemory: 0x%X\n", status);
     }
 
     return status;
 }
-
-
 
 BOOLEAN IsEACPattern(PUCHAR Address, SIZE_T Size) {
     if (!Address || Size < 7) return FALSE;

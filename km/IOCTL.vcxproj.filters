@@ -30,6 +30,10 @@
     <ClCompile Include="Payson IOCTL\pattern_analysis.cpp">
       <Filter>main\nn\features</Filter>
     </ClCompile>
+    <ClCompile Include="Payson IOCTL\mdl_manager.cpp">
+      <Filter>main\nn\features</Filter>
+    </ClCompile>
+    <ClCompile Include="Payson IOCTL\mdl_manager.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Payson IOCTL\nn.h">

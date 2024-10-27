@@ -78,6 +78,7 @@
     <DriverType>KMDF</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
     <Driver_SpectreMitigation>false</Driver_SpectreMitigation>
+    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
@@ -130,8 +131,9 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
-    <OutDir>$(SolutionDir)\build\DRV</OutDir>
+    <OutDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\intermediates\DRV</IntDir>
+    <EnableInf2cat>false</EnableInf2cat>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
@@ -148,18 +150,27 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Link>
       <EntryPointSymbol>DriverEntry</EntryPointSymbol>
-      <AdditionalDependencies>$(DDK_LIB_PATH)netio.lib;$(DDK_LIB_PATH)ntoskrnl.lib;
-$(DDK_LIB_PATH)hal.lib
-;$(DDK_LIB_PATH)wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)netio.lib;$(DDK_LIB_PATH)ntoskrnl.lib;$(DDK_LIB_PATH)hal.lib;$(DDK_LIB_PATH)wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
+      <AdditionalOptions>/IGNORE:4075 %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <DriverSign>
       <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
     </DriverSign>
     <ClCompile>
       <TreatWarningAsError>false</TreatWarningAsError>
+      <WarningLevel>Level3</WarningLevel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <FloatingPointModel>Strict</FloatingPointModel>
       <FloatingPointExceptions>false</FloatingPointExceptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ConformanceMode>false</ConformanceMode>
+      <PreprocessorDefinitions>WIN64;_AMD64_;AMD64;NDIS_SUPPORT_NDIS6=1;NDIS60=1;_NDIS_;POOL_ZERO_DOWN_LEVEL_SUPPORT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <DisableSpecificWarnings>4201;4748;4603;4627;4986;4987;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <SDLCheck>false</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/Zc:sizedDealloc- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -169,12 +180,14 @@ $(DDK_LIB_PATH)hal.lib
     <ClCompile Include="Payson IOCTL\c2_comm.cpp" />
     <ClCompile Include="Payson IOCTL\IOCTL.cpp" />
     <ClCompile Include="Payson IOCTL\jnk.cpp" />
+    <ClCompile Include="Payson IOCTL\mdl_manager.cpp" />
     <ClCompile Include="Payson IOCTL\nn.cpp" />
     <ClCompile Include="Payson IOCTL\pattern_analysis.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Payson IOCTL\c2_comm.h" />
     <ClInclude Include="Payson IOCTL\eac.h" />
+    <ClInclude Include="Payson IOCTL\mdl_manager.hpp" />
     <ClInclude Include="Payson IOCTL\nn.h" />
     <ClInclude Include="Payson IOCTL\pattern_analysis.hpp" />
   </ItemGroup>
