@@ -10,10 +10,17 @@
     <ClCompile Include="main.cpp">
       <Filter>source</Filter>
     </ClCompile>
+    <ClCompile Include="status.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="driver.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h">
       <Filter>source</Filter>
     </ClInclude>
+    <ClInclude Include="status.h" />
   </ItemGroup>
 </Project>
