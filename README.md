@@ -29,11 +29,9 @@ it will check each change previously to avoid system crashes.
 - Complete EAC function hooks and signatures
 - Improve pattern detection accuracy
 - Strengthen encryption
-- Add memory protection
 - Implement more defensive features
 - Optimize performance (AVX/SSE optimizations)
 - FindEacFunction currently only has basic PE parsing
-- Need to add EAC-specific function signatures
 - Make it compatible for manual mapping
 - not everything that is init is unloaded, fix that by simply unload the initialized functions/features, dont forget the clean up
 
