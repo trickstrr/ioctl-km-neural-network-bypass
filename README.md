@@ -1,4 +1,4 @@
-# Payson IOCTL v2
+# Payson IOCTL v2 PASTED from SkarSys
 
 This is my v2 IOCTL cheat driver. This is updated to have latest cr3 for EAC and draws way less detections than the old verison.
 There is no write process memory as that draws detections but you can add it.
@@ -43,6 +43,6 @@ I will update this repo if I have time to do it. please if you have any ideas or
 
 # Credits
 
-Based on [Payson](https://github.com/paysonism)
+Based on [SkarSys](https://github.com/SkarSys)
 Made by [TrickSTRR](https://github.com/trickstrr)
 Discord: .trickstrr
